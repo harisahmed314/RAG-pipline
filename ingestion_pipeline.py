@@ -1,0 +1,111 @@
+import os
+from dotenv import load_dotenv
+from langchain_chroma import Chroma
+from langchain_community.document_loaders import DirectoryLoader, TextLoader
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+# Load environment variables
+load_dotenv(override=True)
+
+
+def load_documents(docs_path="DOCS"):
+    """Load all text files from the docs directory."""
+    print(f"Loading documents from {docs_path}...")
+
+    if not os.path.exists(docs_path):
+        raise FileNotFoundError(
+            f"The directory '{docs_path}' does not exist. Please create it and add your company files."
+        )
+
+    loader = DirectoryLoader(
+        path=docs_path,
+        glob="*.txt",
+        loader_cls=TextLoader,
+        loader_kwargs={"encoding": "utf-8"}
+    )
+
+    documents = loader.load()
+
+    if len(documents) == 0:
+        raise FileNotFoundError(
+            f"No .txt files found in {docs_path}. Please add your company documents."
+        )
+
+    print(f"Successfully loaded {len(documents)} document(s).")
+    return documents
+
+
+def split_documents(documents, chunk_size=1000, chunk_overlap=200):
+    """Split documents into smaller chunks."""
+    print("Splitting documents into chunks...")
+
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        length_function=len,
+        is_separator_regex=False
+    )
+
+    chunks = text_splitter.split_documents(documents)
+    print(f"Created {len(chunks)} chunk(s).")
+    return chunks
+
+
+def create_vector_store(chunks, embedding_model, persist_directory="db/chroma_db"):
+    """Create and persist ChromaDB vector store using local embeddings."""
+    print("Creating embeddings and storing in ChromaDB...")
+
+    print("--- Creating vector store ---")
+    vectorstore = Chroma.from_documents(
+        documents=chunks,
+        embedding=embedding_model,
+        persist_directory=persist_directory,
+        collection_metadata={"hnsw:space": "cosine"}
+    )
+
+    print("--- Finished creating vector store ---")
+    print(f"Vector store created and saved to {persist_directory}")
+    return vectorstore
+
+
+def main():
+    """Main ingestion pipeline"""
+    print("=== RAG Document Ingestion Pipeline ===\n")
+
+    # Define paths and shared embedding model
+    docs_path = "DOCS"
+    persistent_directory = "db/chroma_db"
+    
+    # Initialize the local embedding model once
+    embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+    # Check if vector store already exists
+    if os.path.exists(persistent_directory):
+        print("✅ Vector store already exists. Loading existing database...")
+
+        vectorstore = Chroma(
+            persist_directory=persistent_directory,
+            embedding_function=embedding_model,
+            collection_metadata={"hnsw:space": "cosine"}
+        )
+        print(f"Loaded existing vector store with {vectorstore._collection.count()} chunks.")
+        return vectorstore
+
+    print("Persistent directory does not exist. Initializing vector store...\n")
+
+    # Step 1: Load documents
+    documents = load_documents(docs_path)
+
+    # Step 2: Split into chunks
+    chunks = split_documents(documents)
+
+    # Step 3: Create vector store
+    vectorstore = create_vector_store(chunks, embedding_model, persistent_directory)
+
+    print("\n✅ Ingestion complete! Your documents are now ready for RAG queries.")
+    return vectorstore
+
+
+if __name__ == "__main__":
+    main()
